@@ -25,6 +25,7 @@ export class FinanceService {
 
   /** Sales roster with basic salary, all deductions, commissions, and totals. */
   async getSalesOverview() {
+    try {
     const salesUsers = await this.prisma.user.findMany({
       where: { role: { name: SALES_ROLE }, status: 'active' },
       select: {
@@ -108,6 +109,9 @@ export class FinanceService {
         };
       }),
     };
+    } catch (err: any) {
+      throw new Error(`getSalesOverview failed: ${err?.message ?? err}`);
+    }
   }
 
   async createDeduction(dto: { userId: number; amount: number; reason: string }, actorId: number) {
