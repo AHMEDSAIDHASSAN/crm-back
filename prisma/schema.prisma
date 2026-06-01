@@ -1,0 +1,1030 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// 1. USERS & AUTHENTICATION & HIERARCHY
+// ============================================================================
+
+model Role {
+  id             Int      @id @default(autoincrement())
+  name           String   @unique @db.VarChar(50)
+  displayName    String   @map("display_name") @db.VarChar(100)
+  hierarchyLevel Int      @map("hierarchy_level")
+  permissions    Json?    // Full permission structure
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  users User[]
+
+  @@index([hierarchyLevel], map: "idx_hierarchy")
+  @@map("roles")
+}
+
+// Default roles hierarchy:
+// 1. Admin (highest)
+// 2. Operation Manager
+// 3. Sales Manager
+// 4. Team Leader
+// 5. Sales (Advisor/Consultant)
+
+model User {
+  id           BigInt     @id @default(autoincrement())
+  email        String     @unique @db.VarChar(255)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  firstName    String     @map("first_name") @db.VarChar(100)
+  lastName     String     @map("last_name") @db.VarChar(100)
+  phone        String?    @db.VarChar(20)
+  roleId       Int        @map("role_id")
+  teamId       BigInt?    @map("team_id")
+  dataBatches  DataBatch[]
+  title        SalesTitle? // advisor or consultant for sales roles
+  salary       Decimal?   @db.Decimal(12, 2) // monthly salary; visible only to HR / super_admin
+  status       UserStatus @default(active)
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  role                      Role                    @relation(fields: [roleId], references: [id])
+  team                      Team?                   @relation("TeamMembers", fields: [teamId], references: [id])
+  ledTeams                  Team[]                  @relation("TeamLeader")
+  sessions                  UserSession[]
+  assignedLeads             Lead[]                  @relation("AssignedTo")
+  leadsAsAssignmentBackup   Lead[]                  @relation("LeadAssignmentBackup")
+  leadAssignments           LeadAssignment[]        @relation("AssignedTo")
+  leadAssignmentsCreated    LeadAssignment[]        @relation("AssignedBy")
+  leadFeedbacks             LeadFeedback[]
+  callLogs                  CallLog[]
+  whatsappInteractions      WhatsappInteraction[]
+  meetings                  Meeting[]
+  uploads                   LeadUpload[]
+  notifications             Notification[]
+  auditLogs                 AuditLog[]
+  autoRetractionsCreated    LeadAutoRetraction[]    @relation("PreviousOwner")
+  autoRetractionsReceived   LeadAutoRetraction[]    @relation("ReassignedTo")
+  teamMemberships           TeamMember[]
+  attendanceLogs            AttendanceLog[]
+  createdUnits              Unit[]                  @relation("CreatedBy")
+  createdResaleUnits        ResaleUnit[]            @relation("CreatedBy")
+  unitsPublished            Unit[]                  @relation("UnitPublishedBy")
+  previewsRequested         UnitPreview[]           @relation("PreviewRequestedBy")
+  salaryDeductions          SalesSalaryDeduction[]  @relation("DeductionSubject")
+  deductionsCreated         SalesSalaryDeduction[]  @relation("DeductionCreatedBy")
+  salesCommissions          SalesCommission[]       @relation("CommissionSubject")
+  commissionsCreated        SalesCommission[]       @relation("CommissionCreatedBy")
+  payrollEntries            PayrollEntry[]          @relation("PayrollEntryUser")
+  payrollRunsClosed         PayrollRun[]            @relation("PayrollClosedBy")
+  financeTransactions       FinanceTransaction[]    @relation("TxCreatedBy")
+
+  @@index([email], map: "idx_email")
+  @@index([roleId], map: "idx_role")
+  @@index([teamId], map: "idx_team")
+  @@index([status], map: "idx_status")
+  @@index([title], map: "idx_title")
+  @@map("users")
+}
+
+enum UserStatus {
+  active
+  inactive
+  suspended
+}
+
+enum SalesTitle {
+  advisor
+  consultant
+}
+
+model UserSession {
+  id           BigInt      @id @default(autoincrement())
+  userId       BigInt      @map("user_id")
+  sessionToken String      @unique @map("session_token") @db.VarChar(255)
+  deviceType   DeviceType  @map("device_type")
+  deviceInfo   Json?       @map("device_info")
+  ipAddress    String?     @map("ip_address") @db.VarChar(45)
+  expiresAt    DateTime    @map("expires_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionToken], map: "idx_token")
+  @@index([userId], map: "idx_user")
+  @@index([expiresAt], map: "idx_expires")
+  @@map("user_sessions")
+}
+
+enum DeviceType {
+  web
+  mobile_ios
+  mobile_android
+}
+
+// ============================================================================
+// 2. ATTENDANCE & CHECK-IN/OUT
+// ============================================================================
+
+model AttendanceLog {
+  id             BigInt    @id @default(autoincrement())
+  userId         BigInt    @map("user_id")
+  checkInTime    DateTime  @map("check_in_time")
+  checkInLocation String?  @map("check_in_location") @db.Text // GPS coordinates or address
+  checkOutTime   DateTime? @map("check_out_time")
+  checkOutLocation String? @map("check_out_location") @db.Text
+  isLate         Boolean   @default(false) @map("is_late")
+  lateMinutes    Int?      @map("late_minutes")
+  workDuration   Int?      @map("work_duration") // in minutes
+  penaltyAmount  Decimal?  @map("penalty_amount") @db.Decimal(12, 2) // deduction based on policy
+  notes          String?   @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_user")
+  @@index([checkInTime], map: "idx_check_in")
+  @@index([isLate], map: "idx_late")
+  @@map("attendance_logs")
+}
+
+model HrPolicy {
+  id                   Int      @id @default(autoincrement())
+  name                 String   @db.VarChar(100)
+  shiftStartTime       String   @map("shift_start_time") @db.VarChar(10) // "09:00"
+  shiftEndTime         String   @map("shift_end_time") @db.VarChar(10)   // "17:00"
+  graceMinutes         Int      @default(0) @map("grace_minutes")
+  penaltyPerHour       Decimal  @default(0) @map("penalty_per_hour") @db.Decimal(12, 2) // EGP deducted per late hour
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("hr_policies")
+}
+
+// ============================================================================
+// 3. TEAMS & HIERARCHY
+// ============================================================================
+
+model Team {
+  id           BigInt     @id @default(autoincrement())
+  name         String     @db.VarChar(100)
+  teamLeaderId BigInt?    @map("team_leader_id")
+  status       TeamStatus @default(active)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  teamLeader      User?                @relation("TeamLeader", fields: [teamLeaderId], references: [id])
+  members         User[]               @relation("TeamMembers")
+  leads           Lead[]
+  rotationRules   LeadRotationRule[]
+  teamMemberships TeamMember[]
+
+  @@index([teamLeaderId], map: "idx_leader")
+  @@index([status], map: "idx_status")
+  @@map("teams")
+}
+
+enum TeamStatus {
+  active
+  inactive
+}
+
+model TeamMember {
+  id       BigInt    @id @default(autoincrement())
+  teamId   BigInt    @map("team_id")
+  userId   BigInt    @map("user_id")
+  joinedAt DateTime  @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId, leftAt], map: "unique_active_membership")
+  @@index([teamId], map: "idx_team")
+  @@index([userId], map: "idx_user")
+  @@map("team_members")
+}
+
+// ============================================================================
+// 4. LEADS & DATA SOURCES
+// ============================================================================
+
+model LeadSource {
+  id        Int            @id @default(autoincrement())
+  name      String         @db.VarChar(100)
+  type      LeadSourceType
+  platform  String?        @db.VarChar(50)
+  isActive  Boolean        @default(true) @map("is_active")
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  leads     Lead[]
+  campaigns Campaign[]
+
+  @@index([type], map: "idx_type")
+  @@index([platform], map: "idx_platform")
+  @@map("lead_sources")
+}
+
+enum LeadSourceType {
+  fresh      // Campaign marketing (company pays)
+  cold_call  // Data not from paid campaigns
+  referral
+  walk_in
+  other
+}
+
+model Campaign {
+  id                 BigInt           @id @default(autoincrement())
+  name               String           @db.VarChar(255)
+  platform           CampaignPlatform
+  platformLabel      String?          @map("platform_label") @db.VarChar(100)
+  platformIcon       String?          @map("platform_icon") @db.VarChar(255)
+  campaignIdExternal String?          @map("campaign_id_external") @db.VarChar(255)
+  status             CampaignStatus   @default(active)
+  startDate          DateTime?        @map("start_date") @db.Date
+  endDate            DateTime?        @map("end_date") @db.Date
+  budget             Decimal?         @db.Decimal(10, 2)
+  leadSourceId       Int?             @map("lead_source_id")
+  timeLimit          Int?             @map("time_limit") // hours before rotation if fresh
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  leadSource  LeadSource? @relation(fields: [leadSourceId], references: [id])
+  leads       Lead[]
+  dataBatches DataBatch[]
+
+  @@index([platform], map: "idx_platform")
+  @@index([status], map: "idx_status")
+  @@index([campaignIdExternal], map: "idx_external_id")
+  @@map("campaigns")
+}
+
+enum CampaignPlatform {
+  facebook
+  instagram
+  meta
+  dubizzle
+  property_finder
+  other
+}
+
+enum CampaignStatus {
+  active
+  paused
+  completed
+}
+
+/** When a time-limited assignment ends, apply this action. */
+enum LeadAssignmentExpireAction {
+  rotation
+  backup_sales
+}
+
+model Lead {
+  id                  BigInt            @id @default(autoincrement())
+  firstName           String?           @map("first_name") @db.VarChar(100)
+  lastName            String?           @map("last_name") @db.VarChar(100)
+  phone               String            @db.VarChar(20)
+  email               String?           @db.VarChar(255)
+  leadSourceId        Int?              @map("lead_source_id")
+  campaignId          BigInt?           @map("campaign_id")
+  dataBatchId         BigInt?           @map("data_batch_id")
+  status              LeadStatus        @default(new_lead)
+  priority            LeadPriority      @default(medium)
+  isStarred           Boolean           @default(false) @map("is_starred")
+  assignedTo          BigInt?           @map("assigned_to")
+  assignedAt          DateTime?         @map("assigned_at")
+  assignmentMode      AssignmentMode    @default(standard) @map("assignment_mode")
+  /** When set, temporary assignment ends at this time (see assignmentExpireAction). */
+  assignmentExpiresAt     DateTime?                    @map("assignment_expires_at")
+  assignmentExpireAction  LeadAssignmentExpireAction?  @map("assignment_expire_action")
+  assignmentBackupUserId  BigInt?                      @map("assignment_backup_user_id")
+  teamId              BigInt?           @map("team_id")
+  propertyPreferences Json?             @map("property_preferences")
+  notes               String?           @db.Text
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  leadFront           Boolean           @default(true) @map("lead_front")
+  type                LeadType          @default(primary)
+
+  leadSource           LeadSource?           @relation(fields: [leadSourceId], references: [id])
+  campaign             Campaign?             @relation(fields: [campaignId], references: [id])
+  dataBatch            DataBatch?            @relation(fields: [dataBatchId], references: [id])
+  assignedUser         User?                 @relation("AssignedTo", fields: [assignedTo], references: [id])
+  assignmentBackupUser User?                 @relation("LeadAssignmentBackup", fields: [assignmentBackupUserId], references: [id])
+  team                 Team?                 @relation(fields: [teamId], references: [id])
+  assignments          LeadAssignment[]
+  feedbacks            LeadFeedback[]
+  callLogs             CallLog[]
+  whatsappInteractions WhatsappInteraction[]
+  meetings             Meeting[]
+  autoRetractions      LeadAutoRetraction[]
+
+  @@index([phone], map: "idx_phone")
+  @@index([email], map: "idx_email")
+  @@index([status], map: "idx_status")
+  @@index([assignedTo], map: "idx_assigned")
+  @@index([teamId], map: "idx_team")
+  @@index([dataBatchId], map: "idx_data_batch")
+  @@index([type], map: "idx_type")
+  @@index([isStarred], map: "idx_starred")
+  @@index([createdAt], map: "idx_created")
+  @@index([assignedTo, status], map: "idx_leads_assigned_status")
+  @@index([assignmentExpiresAt], map: "idx_leads_assignment_expires")
+  @@index([teamId, status], map: "idx_leads_team_status")
+  @@index([createdAt, status], map: "idx_leads_created_status")
+  @@fulltext([firstName, lastName, email], map: "idx_leads_search")
+  @@map("leads")
+}
+
+enum LeadType {
+  primary
+  cold_call
+  campaign
+}
+
+model DataBatch {
+  id              BigInt         @id @default(autoincrement())
+  batchName       String         @map("batch_name") @db.VarChar(255)
+  dataSource      String         @map("data_source") @db.VarChar(255)
+  purchaseDate    DateTime?      @map("purchase_date") @db.Date
+  purchasePrice   Decimal?       @map("purchase_price") @db.Decimal(10, 2)
+  totalRecords    Int            @map("total_records")
+  quality         DataQuality?
+  notes           String?        @db.Text
+  createdBy       BigInt         @map("created_by")
+  /** When set, leads imported from this batch are type `campaign` and linked to this marketing campaign */
+  campaignId      BigInt?        @map("campaign_id")
+  /** Last Excel import: rows created as new leads */
+  importedCount          Int      @default(0) @map("imported_count")
+  /** Last Excel import: skipped (duplicate phone vs DB or duplicate row in file) */
+  skippedDuplicateCount  Int      @default(0) @map("skipped_duplicate_count")
+  /** Last Excel import: invalid (e.g. missing phone) or row errors */
+  failedImportCount      Int      @default(0) @map("failed_import_count")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  creator       User         @relation(fields: [createdBy], references: [id])
+  campaign      Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  leadUploads   LeadUpload[]
+  leads         Lead[]
+
+  @@index([dataSource], map: "idx_data_source")
+  @@index([campaignId], map: "idx_data_batch_campaign")
+  @@index([purchaseDate], map: "idx_purchase_date")
+  @@index([createdBy], map: "idx_creator")
+  @@map("data_batches")
+}
+
+enum DataQuality {
+  high
+  medium
+  low
+}
+
+enum LeadStatus {
+  new_lead
+  cold_call
+  follow_up
+  qualified
+  no_answer
+  wrong_number
+  not_interested
+  switched_off
+  meeting_cancelled
+  purchased
+  assigned
+  rotation
+  interested
+  contacted
+  converted
+  closed
+  lost
+}
+
+enum LeadPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum AssignmentMode {
+  standard   // Operation -> Sales Manager -> Team Leader -> Sales
+  customize  // Operation -> Sales directly
+}
+
+model LeadUpload {
+  id                BigInt       @id @default(autoincrement())
+  uploadedBy        BigInt       @map("uploaded_by")
+  dataBatchId       BigInt?      @map("data_batch_id")
+  fileName          String       @map("file_name") @db.VarChar(255)
+  filePath          String?      @map("file_path") @db.VarChar(500)
+  totalRows         Int          @map("total_rows")
+  successfulImports Int          @default(0) @map("successful_imports")
+  failedImports     Int          @default(0) @map("failed_imports")
+  status            UploadStatus @default(processing)
+  errorLog          String?      @map("error_log") @db.Text
+  createdAt         DateTime     @default(now()) @map("created_at")
+  completedAt       DateTime?    @map("completed_at")
+
+  uploader  User        @relation(fields: [uploadedBy], references: [id])
+  dataBatch DataBatch?  @relation(fields: [dataBatchId], references: [id])
+
+  @@index([uploadedBy], map: "idx_uploader")
+  @@index([dataBatchId], map: "idx_data_batch")
+  @@index([status], map: "idx_status")
+  @@index([createdAt], map: "idx_created")
+  @@map("lead_uploads")
+}
+
+
+enum UploadStatus {
+  processing
+  completed
+  failed
+}
+
+// ============================================================================
+// 5. LEAD MANAGEMENT & WORKFLOW
+// ============================================================================
+
+model LeadAssignment {
+  id             BigInt         @id @default(autoincrement())
+  leadId         BigInt         @map("lead_id")
+  assignedTo     BigInt         @map("assigned_to")
+  assignedBy     BigInt?        @map("assigned_by")
+  assignmentType AssignmentType @map("assignment_type")
+  assignedAt     DateTime       @default(now()) @map("assigned_at")
+  retractedAt    DateTime?      @map("retracted_at")
+  reason         String?        @db.Text
+
+  lead         Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignedUser User  @relation("AssignedTo", fields: [assignedTo], references: [id])
+  assigner     User? @relation("AssignedBy", fields: [assignedBy], references: [id])
+
+  @@index([leadId], map: "idx_lead")
+  @@index([assignedTo], map: "idx_assigned_to")
+  @@index([assignedAt], map: "idx_assigned_at")
+  @@index([leadId, assignedAt], map: "idx_assignments_lead_assigned")
+  @@map("lead_assignments")
+}
+
+enum AssignmentType {
+  initial
+  manual
+  rotation       // Redistributed due to no_answer
+  auto_retract
+}
+
+model LeadFeedback {
+  id             BigInt          @id @default(autoincrement())
+  leadId         BigInt          @map("lead_id")
+  userId         BigInt          @map("user_id")
+  feedbackType   LeadStatus      @map("feedback_type")
+  description    String          @db.Text
+  nextAction     String?         @map("next_action") @db.VarChar(255)
+  nextActionDate DateTime?       @map("next_action_date")
+  callDuration   Int?            @map("call_duration")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  lead                 Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user                 User                  @relation(fields: [userId], references: [id])
+  callLogs             CallLog[]
+  whatsappInteractions WhatsappInteraction[]
+
+  @@index([leadId], map: "idx_lead")
+  @@index([userId], map: "idx_user")
+  @@index([createdAt], map: "idx_created")
+  @@index([leadId, createdAt], map: "idx_feedback_lead_created")
+  @@fulltext([description], map: "idx_feedback_search")
+  @@map("lead_feedback")
+}
+
+
+
+model LeadRotationRule {
+  id                    Int      @id @default(autoincrement())
+  ruleName              String   @map("rule_name") @db.VarChar(100)
+  teamId                BigInt?  @map("team_id")
+  timeLimitHours        Int      @map("time_limit_hours")
+  maxNoAnswerAttempts   Int      @default(3) @map("max_no_answer_attempts")
+  noAnswerDaysThreshold Int      @default(7) @map("no_answer_days_threshold")
+  isActive              Boolean  @default(true) @map("is_active")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  team Team? @relation(fields: [teamId], references: [id])
+
+  @@index([teamId], map: "idx_team")
+  @@index([isActive], map: "idx_active")
+  @@map("lead_rotation_rules")
+}
+
+model LeadAutoRetraction {
+  id                       BigInt   @id @default(autoincrement())
+  leadId                   BigInt   @map("lead_id")
+  previousOwner            BigInt   @map("previous_owner")
+  retractedAt              DateTime @default(now()) @map("retracted_at")
+  reason                   String   @db.VarChar(255)
+  timeWithoutFeedbackHours Int?     @map("time_without_feedback_hours")
+  reassignedTo             BigInt?  @map("reassigned_to")
+
+  lead           Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  previousUser   User  @relation("PreviousOwner", fields: [previousOwner], references: [id])
+  reassignedUser User? @relation("ReassignedTo", fields: [reassignedTo], references: [id])
+
+  @@index([leadId], map: "idx_lead")
+  @@index([previousOwner], map: "idx_previous_owner")
+  @@index([retractedAt], map: "idx_retracted")
+  @@map("lead_auto_retractions")
+}
+
+// ============================================================================
+// 6. ACTIVITIES & TRACKING
+// ============================================================================
+
+model CallLog {
+  id            BigInt     @id @default(autoincrement())
+  leadId        BigInt     @map("lead_id")
+  userId        BigInt     @map("user_id")
+  callType      CallType   @default(outbound) @map("call_type")
+  callStatus    CallStatus @map("call_status")
+  duration      Int?
+  recordingUrl  String?    @map("recording_url") @db.VarChar(500)
+  initiatedFrom Platform   @map("initiated_from")
+  feedbackId    BigInt?    @map("feedback_id")
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  lead     Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id])
+  feedback LeadFeedback? @relation(fields: [feedbackId], references: [id])
+
+  @@index([leadId], map: "idx_lead")
+  @@index([userId], map: "idx_user")
+  @@index([createdAt], map: "idx_created")
+  @@map("call_logs")
+}
+
+enum CallType {
+  outbound
+  inbound
+}
+
+enum CallStatus {
+  completed
+  no_answer
+  busy
+  failed
+}
+
+enum Platform {
+  web
+  mobile
+}
+
+model WhatsappInteraction {
+  id            BigInt   @id @default(autoincrement())
+  leadId        BigInt   @map("lead_id")
+  userId        BigInt   @map("user_id")
+  messageCount  Int      @default(1) @map("message_count")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  initiatedFrom Platform @map("initiated_from")
+  feedbackId    BigInt?  @map("feedback_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  lead     Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id])
+  feedback LeadFeedback? @relation(fields: [feedbackId], references: [id])
+
+  @@index([leadId], map: "idx_lead")
+  @@index([userId], map: "idx_user")
+  @@index([createdAt], map: "idx_created")
+  @@map("whatsapp_interactions")
+}
+
+// ============================================================================
+// 7. MEETINGS
+// ============================================================================
+
+model Meeting {
+  id           BigInt        @id @default(autoincrement())
+  leadId       BigInt        @map("lead_id")
+  scheduledBy  BigInt        @map("scheduled_by")
+  meetingDate  DateTime      @map("meeting_date")
+  location     String?       @db.VarChar(255)
+  meetingType  MeetingType   @map("meeting_type")
+  isPrivate    Boolean       @default(false) @map("is_private") // Custom manual meeting
+  status       MeetingStatus @default(scheduled)
+  currentLocation String?    @map("current_location") @db.Text // GPS when meeting begins
+  checkoutLocation String?   @map("checkout_location") @db.Text // GPS when meeting ends
+  startedAt    DateTime?     @map("started_at")
+  endedAt      DateTime?     @map("ended_at")
+  feedback     String?       @db.Text // Feedback after meeting ends
+  notes        String?       @db.Text
+  outcome      String?       @db.Text
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  lead      Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  scheduler User @relation(fields: [scheduledBy], references: [id])
+
+  @@index([leadId], map: "idx_lead")
+  @@index([scheduledBy], map: "idx_scheduled_by")
+  @@index([meetingDate], map: "idx_meeting_date")
+  @@index([status], map: "idx_status")
+  @@index([isPrivate], map: "idx_private")
+  @@map("meetings")
+}
+
+enum MeetingType {
+  site_visit
+  office
+  virtual
+  other
+}
+
+enum MeetingStatus {
+  scheduled
+  in_progress
+  completed
+  cancelled
+  no_show
+}
+
+// ============================================================================
+// 8. UNITS MANAGEMENT (Projects & Resale)
+// ============================================================================
+
+model Unit {
+  id                 BigInt     @id @default(autoincrement())
+  code               String     @unique @db.VarChar(100) // Unique unit code
+  description        String     @db.Text
+  /** Short listing address line (e.g. compound + unit summary) */
+  address            String?    @db.VarChar(512)
+  projectName        String?    @map("project_name") @db.VarChar(255)
+  location           String?    @db.VarChar(255)
+  floor              Int?
+  price              Decimal?   @db.Decimal(15, 2)
+  /** القسط الشهري (monthly installment), optional */
+  monthlyInstallment Decimal?   @map("monthly_installment") @db.Decimal(15, 2)
+  /** معاد الاستلام (delivery / handover date) */
+  deliveryDate       DateTime?  @map("delivery_date") @db.Date
+  bedrooms           Int?
+  bathrooms          Int?
+  area               Decimal?   @db.Decimal(10, 2) // sqm or sqft
+  unitType           String?    @map("unit_type") @db.VarChar(100) // apartment, villa, etc
+  amenities          Json?      // Array of amenities
+  /** Extra URLs (listings, videos, etc.) — array of strings */
+  externalLinks      Json?      @map("external_links")
+  images             Json?      // Array of image URLs
+  /** Google Drive (or similar) link for media / files — no binary upload */
+  driveMediaLink     String?    @map("drive_media_link") @db.VarChar(1024)
+  isPublished        Boolean    @default(false) @map("is_published")
+  publishedLink      String?    @map("published_link") @db.VarChar(1024)
+  publishedAt        DateTime?  @map("published_at")
+  publishedById      BigInt?    @map("published_by_id")
+  status             UnitStatus @default(available)
+  createdBy          BigInt     @map("created_by")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  creator     User          @relation("CreatedBy", fields: [createdBy], references: [id])
+  publishedBy User?         @relation("UnitPublishedBy", fields: [publishedById], references: [id])
+  previews    UnitPreview[]
+
+  @@index([code], map: "idx_code")
+  @@index([status], map: "idx_status")
+  @@index([projectName], map: "idx_project")
+  @@index([createdBy], map: "idx_creator")
+  @@fulltext([description, projectName, location, address], map: "idx_unit_search")
+  @@map("units")
+}
+
+enum UnitStatus {
+  available
+  reserved
+  sold
+  unavailable
+}
+
+// ============================================================================
+// 8b. UNIT PREVIEW / SHOWING REQUESTS
+// ============================================================================
+
+model UnitPreview {
+  id            BigInt            @id @default(autoincrement())
+  unitId        BigInt            @map("unit_id")
+  requestedById BigInt            @map("requested_by_id")
+  clientName    String            @map("client_name") @db.VarChar(255)
+  clientPhone   String?           @map("client_phone") @db.VarChar(30)
+  scheduledAt   DateTime          @map("scheduled_at")
+  durationMin   Int?              @default(60) @map("duration_min")
+  notes         String?           @db.Text
+  status        UnitPreviewStatus @default(pending)
+  checkInAt     DateTime?         @map("check_in_at")
+  checkInLat    Decimal?          @map("check_in_lat") @db.Decimal(10, 7)
+  checkInLng    Decimal?          @map("check_in_lng") @db.Decimal(10, 7)
+  checkOutAt    DateTime?         @map("check_out_at")
+  checkOutLat   Decimal?          @map("check_out_lat") @db.Decimal(10, 7)
+  checkOutLng   Decimal?          @map("check_out_lng") @db.Decimal(10, 7)
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  unit        Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  requestedBy User @relation("PreviewRequestedBy", fields: [requestedById], references: [id])
+
+  @@index([unitId], map: "idx_preview_unit")
+  @@index([requestedById], map: "idx_preview_requester")
+  @@index([status], map: "idx_preview_status")
+  @@index([scheduledAt], map: "idx_preview_scheduled")
+  @@map("unit_previews")
+}
+
+enum UnitPreviewStatus {
+  pending
+  scheduled
+  checked_in
+  checked_out
+  cancelled
+}
+
+model ResaleUnit {
+  id          BigInt           @id @default(autoincrement())
+  code        String           @unique @db.VarChar(100) // Unique resale unit code
+  description String           @db.Text
+  ownerName   String?          @map("owner_name") @db.VarChar(255)
+  ownerPhone  String?          @map("owner_phone") @db.VarChar(20)
+  location    String?          @db.VarChar(255)
+  askingPrice Decimal?         @map("asking_price") @db.Decimal(15, 2)
+  bedrooms    Int?
+  bathrooms   Int?
+  area        Decimal?         @db.Decimal(10, 2)
+  unitType    String?          @map("unit_type") @db.VarChar(100)
+  amenities   Json?
+  images      Json?
+  status      ResaleUnitStatus @default(available)
+  createdBy   BigInt           @map("created_by")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  creator User @relation("CreatedBy", fields: [createdBy], references: [id])
+
+  @@index([code], map: "idx_code")
+  @@index([status], map: "idx_status")
+  @@index([createdBy], map: "idx_creator")
+  @@fulltext([description, location, ownerName], map: "idx_resale_search")
+  @@map("resale_units")
+}
+
+enum ResaleUnitStatus {
+  available
+  reserved
+  sold
+  unavailable
+}
+
+// ============================================================================
+// 9. SYSTEM CONFIGURATION
+// ============================================================================
+
+model SystemSetting {
+  id           Int      @id @default(autoincrement())
+  settingKey   String   @unique @map("setting_key") @db.VarChar(100)
+  settingValue String?  @map("setting_value") @db.Text
+  dataType     DataType @default(string) @map("data_type")
+  description  String?  @db.Text
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([settingKey], map: "idx_key")
+  @@map("system_settings")
+}
+
+enum DataType {
+  string
+  integer
+  boolean
+  json
+}
+
+model Notification {
+  id                BigInt           @id @default(autoincrement())
+  userId            BigInt           @map("user_id")
+  notificationType  NotificationType @map("notification_type")
+  title             String           @db.VarChar(255)
+  message           String?          @db.Text
+  isRead            Boolean          @default(false) @map("is_read")
+  relatedEntityType String?          @map("related_entity_type") @db.VarChar(50)
+  relatedEntityId   BigInt?          @map("related_entity_id")
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_user")
+  @@index([isRead], map: "idx_read")
+  @@index([createdAt], map: "idx_created")
+  @@map("notifications")
+}
+
+enum NotificationType {
+  lead_assigned
+  lead_retracted
+  meeting_reminder
+  meeting_scheduled
+  unit_created
+  unit_published
+  preview_requested
+  preview_approved
+  preview_rejected
+  preview_checked_in
+  preview_checked_out
+  preview_cancelled
+  system_alert
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  userId     BigInt?  @map("user_id")
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   BigInt?  @map("entity_id")
+  oldValues  Json?    @map("old_values")
+  newValues  Json?    @map("new_values")
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "idx_user")
+  @@index([entityType, entityId], map: "idx_entity")
+  @@index([createdAt], map: "idx_created")
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// FINANCE — Sales salaries, manual deductions, commissions (HR / Super Admin)
+// ============================================================================
+
+enum SalesCommissionStatus {
+  pending_collection
+  collected
+}
+
+model SalesSalaryDeduction {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt   @map("user_id")
+  amount      Decimal  @db.Decimal(12, 2)
+  reason      String   @db.VarChar(500)
+  createdAt   DateTime @default(now()) @map("created_at")
+  createdById BigInt?  @map("created_by_id")
+
+  user      User  @relation("DeductionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("DeductionCreatedBy", fields: [createdById], references: [id])
+
+  @@index([userId], map: "idx_deduction_user")
+  @@map("sales_salary_deductions")
+}
+
+model CommissionRate {
+  id             Int      @id @default(autoincrement())
+  developerName  String   @db.VarChar(150) @map("developer_name")
+  companyRatePct Decimal  @db.Decimal(5, 2) @map("company_rate_pct") // % of unit price → company gross
+  salesRatePct   Decimal  @db.Decimal(5, 2) @map("sales_rate_pct")   // % of company gross → salesperson
+  taxRatePct     Decimal  @default(0) @db.Decimal(5, 2) @map("tax_rate_pct")
+  isActive       Boolean  @default(true) @map("is_active")
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  commissions SalesCommission[]
+
+  @@map("commission_rates")
+}
+
+model SalesCommission {
+  id               BigInt                @id @default(autoincrement())
+  userId           BigInt                @map("user_id")
+  title            String                @db.VarChar(500)
+  developerName    String?               @db.VarChar(150) @map("developer_name")
+  commissionRateId Int?                  @map("commission_rate_id")
+  unitPrice        Decimal?              @db.Decimal(14, 2) @map("unit_price")
+  companyRatePct   Decimal?              @db.Decimal(5, 2) @map("company_rate_pct")
+  salesRatePct     Decimal?              @db.Decimal(5, 2) @map("sales_rate_pct")
+  taxRatePct       Decimal?              @db.Decimal(5, 2) @map("tax_rate_pct")
+  companyAmount    Decimal?              @db.Decimal(14, 2) @map("company_amount")
+  salesAmount      Decimal?              @db.Decimal(14, 2) @map("sales_amount")
+  taxAmount        Decimal?              @db.Decimal(14, 2) @map("tax_amount")
+  amount           Decimal?              @db.Decimal(12, 2) // legacy / override total
+  saleDate         DateTime              @map("sale_date") @db.Date
+  dueNote          String?               @map("due_note") @db.Text
+  status           SalesCommissionStatus @default(pending_collection)
+  collectedAt      DateTime?             @map("collected_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  createdById      BigInt?               @map("created_by_id")
+
+  user           User            @relation("CommissionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation("CommissionCreatedBy", fields: [createdById], references: [id])
+  commissionRate CommissionRate? @relation(fields: [commissionRateId], references: [id])
+
+  @@index([userId], map: "idx_commission_user")
+  @@index([status], map: "idx_commission_status")
+  @@map("sales_commissions")
+}
+
+// ============================================================================
+// FINANCE MODULE — TRANSACTIONS, FIXED BILLS, PAYROLL RUNS
+// ============================================================================
+
+model FinanceTransaction {
+  id          BigInt   @id @default(autoincrement())
+  type        TxType
+  category    String   @db.VarChar(80)
+  amount      Decimal  @db.Decimal(14, 2)
+  description String?  @db.Text
+  date        DateTime @db.Date
+  department  String?  @db.VarChar(100)
+  month       String   @db.VarChar(7) // YYYY-MM quick filter
+  createdById BigInt?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy User? @relation("TxCreatedBy", fields: [createdById], references: [id])
+
+  @@index([type], map: "idx_tx_type")
+  @@index([month], map: "idx_tx_month")
+  @@map("finance_transactions")
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+model FixedBill {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(150)
+  category  String   @db.VarChar(80)
+  amount    Decimal  @db.Decimal(14, 2)
+  dueDay    Int      @default(1) @map("due_day")
+  isActive  Boolean  @default(true) @map("is_active")
+  notes     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("fixed_bills")
+}
+
+model PayrollRun {
+  id              BigInt        @id @default(autoincrement())
+  month           String        @unique @db.VarChar(7) // YYYY-MM
+  status          PayrollStatus @default(DRAFT)
+  totalGross      Decimal       @default(0) @map("total_gross") @db.Decimal(14, 2)
+  totalDeductions Decimal       @default(0) @map("total_deductions") @db.Decimal(14, 2)
+  totalNet        Decimal       @default(0) @map("total_net") @db.Decimal(14, 2)
+  closedAt        DateTime?     @map("closed_at")
+  closedById      BigInt?       @map("closed_by_id")
+  notes           String?       @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  closedBy User?          @relation("PayrollClosedBy", fields: [closedById], references: [id])
+  entries  PayrollEntry[]
+
+  @@map("payroll_runs")
+}
+
+enum PayrollStatus {
+  DRAFT
+  CLOSED
+}
+
+model PayrollEntry {
+  id           BigInt     @id @default(autoincrement())
+  payrollRunId BigInt     @map("payroll_run_id")
+  userId       BigInt     @map("user_id")
+  baseSalary   Decimal    @map("base_salary") @db.Decimal(14, 2)
+  deductions   Decimal    @default(0) @db.Decimal(14, 2)
+  netSalary    Decimal    @map("net_salary") @db.Decimal(14, 2)
+  isPaid       Boolean    @default(false) @map("is_paid")
+  paidAt       DateTime?  @map("paid_at")
+  notes        String?    @db.Text
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  user       User       @relation("PayrollEntryUser", fields: [userId], references: [id])
+
+  @@unique([payrollRunId, userId])
+  @@map("payroll_entries")
+}
