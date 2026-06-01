@@ -398,6 +398,7 @@ enum LeadStatus {
   follow_up
   qualified
   no_answer
+  no_answer_first_call
   wrong_number
   not_interested
   switched_off
