@@ -1,4 +1,4 @@
-import { IsInt, IsEnum, IsString, IsOptional, IsDateString, IsIn } from 'class-validator';
+import { IsInt, IsEnum, IsString, IsOptional, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeadStatus } from '@prisma/client';
 
@@ -11,9 +11,9 @@ export class CreateLeadFeedbackDto {
     @IsInt()
     userId: number;
 
-    @ApiProperty()
-    @IsIn(['new_lead', 'cold_call', 'follow_up', 'qualified', 'no_answer', 'wrong_number', 'not_interested', 'purchased', 'assigned', 'rotation'])
-    feedbackType: string;
+    @ApiProperty({ enum: LeadStatus })
+    @IsEnum(LeadStatus)
+    feedbackType: LeadStatus;
 
     @ApiProperty()
     @IsString()
